@@ -1,40 +1,68 @@
 #!/bin/bash
 
-# 1. Fuzzy search for zip files in downloads
-ZIP_FILE=$(fd -e zip . ~/storage/downloads/ | fzf --prompt="Select ZIP: ")
+while true; do
+    # 1. Fuzzy search for zip files
+    ZIP_FILE=$(fd -e zip . ~/storage/downloads/ | fzf --prompt="Select ZIP: ")
+    [ -z "$ZIP_FILE" ] && echo "No file selected. Exiting." && break
 
-# Exit if no file selected
-[ -z "$ZIP_FILE" ] && echo "No file selected. Exiting." && exit 1
+    # 2. Copy and prepare
+    cp "$ZIP_FILE" .
+    LOCAL_ZIP=$(basename "$ZIP_FILE")
+    TEMP_DIR="temp_unzip_$(date +%s)"
+    mkdir "$TEMP_DIR"
+    unzip -q "$LOCAL_ZIP" -d "$TEMP_DIR"
 
-# 2. Copy selected file to current folder
-cp "$ZIP_FILE" .
-LOCAL_ZIP=$(basename "$ZIP_FILE")
+    # s/ /_/g replaces spaces
+    # s/[^\x00-\x7F]//g removes non-ASCII (emojis/special chars)
+    # find "$TEMP_DIR" -depth -exec rename 's/ /_/g; s/[^\x00-\x7F]//g' {} +
+    # fd -H -d 10 . "$TEMP_DIR" -x rename 's/ /_/g; s/[^\x00-\x7F]//g'
+    fd -H . "$TEMP_DIR" -x bash -c 'mv "$1" "${1//[^[:ascii:]]/}"' _ {}
+    
+    fd .
 
-# 3. Unzip into a temporary directory to keep things clean
-TEMP_DIR="temp_unzip_$(date +%s)"
-mkdir "$TEMP_DIR"
-unzip -q "$LOCAL_ZIP" -d "$TEMP_DIR"
+    # 3. Fuzzy search which cleaned item to keep
+    PRESERVE_PATH=$(fd . "$TEMP_DIR" | fzf --prompt="Select item to keep: ")
 
-# 4. Fuzzy search which extracted file/folder to preserve
-PRESERVE=$(fd . "$TEMP_DIR" | sed "s|^$TEMP_DIR/||" | fzf --prompt="Select item to keep: ")
+    if [ -z "$PRESERVE_PATH" ]; then
+        echo "Nothing selected. Cleaning up..."
+        rm -rf "$TEMP_DIR" "$LOCAL_ZIP"
+    else
+        # Move the now-clean file to current directory
+        FINAL_NAME=$(basename "$PRESERVE_PATH")
+        mv "$PRESERVE_PATH" "./$FINAL_NAME"
+        
+        # Cleanup internals
+        rm -rf "$TEMP_DIR" "$LOCAL_ZIP"
 
-[ -z "$PRESERVE" ] && echo "Nothing selected to keep. Cleaning up..." && rm -rf "$TEMP_DIR" "$LOCAL_ZIP" && exit 1
+        # 4. Conditional Python Execution
+        LOWER_ZIP=$(echo "$LOCAL_ZIP" | tr '[:upper:]' '[:lower:]')
 
-# Move selected to current folder and clean up zip/temp
-mv "$TEMP_DIR/$PRESERVE" .
-rm -rf "$TEMP_DIR"
-rm "$LOCAL_ZIP"
+        if [[ "$LOWER_ZIP" == *"instagram"* ]]; then
+            echo "Processing Instagram: $FINAL_NAME"
+            python -c "from statsAvg2 import *; write_csv(parse_instagram('$FINAL_NAME'))"
+        elif [[ "$LOWER_ZIP" == *"whatsapp"* ]]; then
+            echo "Processing WhatsApp: $FINAL_NAME"
+            python -c "from statsAvg2 import *; write_csv(parse_whatsapp('$FINAL_NAME'))"
+        fi
 
-# 5. Conditional Python Execution
-# Convert to lowercase for easier comparison
-LOWER_PRESERVE=$(echo "$LOCAL_ZIP" | tr '[:upper:]' '[:lower:]')
+        rm -rf "$FINAL_NAME"
+        echo "Successfully processed data."
+    fi
 
-if [[ "$LOWER_PRESERVE" == *"instagram"* ]]; then
-    echo "Instagram data detected. Running parser..."
-    python -c "from statsAvg2 import *; write_csv(parse_instagram('$(basename "$PRESERVE")'))"
-elif [[ "$LOWER_PRESERVE" == *"whatsapp"* ]]; then
-    echo "WhatsApp data detected. Running parser..."
-    python -c "from statsAvg2 import *; write_csv(parse_whatsapp('$(basename "$PRESERVE")'))"
-fi
+    # 5. Loop control
+    read -p "Add another file? (y/n): " CHOICE
+    case "$CHOICE" in
+        [yY]*) echo "Restarting..." ;;
+        *) 
+            if [ -f "data.csv" ]; then
+                echo 'plotting'
+                python -c "from statsAvg2 import *; plot_avg(read_csv('data.csv'))"
+            else
+                echo "No data to plot."
+            fi
+            break 
+            ;;
+    esac
+done
 
-echo "Done! Preserved: $PRESERVE"
+echo "Done!"
