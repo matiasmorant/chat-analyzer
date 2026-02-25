@@ -16,14 +16,25 @@ mkdir "$TEMP_DIR"
 unzip -q "$LOCAL_ZIP" -d "$TEMP_DIR"
 
 # 4. Fuzzy search which extracted file/folder to preserve
-# We search inside the temp dir, but strip the prefix for a cleaner view
 PRESERVE=$(fd . "$TEMP_DIR" | sed "s|^$TEMP_DIR/||" | fzf --prompt="Select item to keep: ")
 
 [ -z "$PRESERVE" ] && echo "Nothing selected to keep. Cleaning up..." && rm -rf "$TEMP_DIR" "$LOCAL_ZIP" && exit 1
 
-# 5. Move selected to current folder, delete the rest
+# Move selected to current folder and clean up zip/temp
 mv "$TEMP_DIR/$PRESERVE" .
 rm -rf "$TEMP_DIR"
 rm "$LOCAL_ZIP"
+
+# 5. Conditional Python Execution
+# Convert to lowercase for easier comparison
+LOWER_PRESERVE=$(echo "$LOCAL_ZIP" | tr '[:upper:]' '[:lower:]')
+
+if [[ "$LOWER_PRESERVE" == *"instagram"* ]]; then
+    echo "Instagram data detected. Running parser..."
+    python -c "from statsAvg2 import *; write_csv(parse_instagram('$(basename "$PRESERVE")'))"
+elif [[ "$LOWER_PRESERVE" == *"whatsapp"* ]]; then
+    echo "WhatsApp data detected. Running parser..."
+    python -c "from statsAvg2 import *; write_csv(parse_whatsapp('$(basename "$PRESERVE")'))"
+fi
 
 echo "Done! Preserved: $PRESERVE"
