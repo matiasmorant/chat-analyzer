@@ -139,38 +139,64 @@
         updatePlot();
     }
 
-    function updatePlot() {
-        const weeks = {};
-        const senders = new Set();
-        
-        masterData.forEach(m => {
-            // Group by Monday using date-fns
-            const monday = dateFns.format(dateFns.startOfWeek(m.date, { weekStartsOn: 1 }), 'yyyy-MM-dd');
-            
-            senders.add(m.sender);
-            if (!weeks[monday]) weeks[monday] = {};
-            weeks[monday][m.sender] = (weeks[monday][m.sender] || 0) + m.wordCount;
-        });
+	function updatePlot() {
+	    if (masterData.length === 0) return;
 
-        const sortedWeeks = Object.keys(weeks).sort();
-        const datasets = Array.from(senders).map(sender => ({
-            label: sender,
-            data: sortedWeeks.map(w => (weeks[w][sender] || 0) / 7),
-            borderWidth: 2,
-            tension: 0.3
-        }));
+	    const weeks = {};
+	    const senders = new Set();
+	    
+	    // 1. Find the absolute bounds of the data (similar to first_date/last_date in Python)
+	    const firstDate = masterData[0].date;
+	    const lastDate = masterData[masterData.length - 1].date;
 
-        if (chart) chart.destroy();
-        chart = new Chart(document.getElementById('msgChart'), {
-            type: 'line',
-            data: { labels: sortedWeeks, datasets: datasets },
-            options: { 
-                responsive: true, 
-                maintainAspectRatio: false,
-                plugins: { legend: { position: 'bottom' } }
-            }
-        });
-    }
+	    masterData.forEach(m => {
+	        const mondayDate = dateFns.startOfWeek(m.date, { weekStartsOn: 1 });
+	        const mondayStr = dateFns.format(mondayDate, 'yyyy-MM-dd');
+	        
+	        senders.add(m.sender);
+	        if (!weeks[mondayStr]) weeks[mondayStr] = { totals: {}, monday: mondayDate };
+	        
+	        weeks[mondayStr].totals[m.sender] = (weeks[mondayStr].totals[m.sender] || 0) + m.wordCount;
+	    });
+
+	    const sortedWeekKeys = Object.keys(weeks).sort();
+	    
+	    const datasets = Array.from(senders).map(sender => ({
+	        label: sender,
+	        data: sortedWeekKeys.map(wKey => {
+	            const week = weeks[wKey];
+	            const currentWeekStart = week.monday;
+	            const currentWeekEnd = dateFns.addDays(currentWeekStart, 7);
+	            const effStart = currentWeekStart < firstDate ? firstDate : currentWeekStart;
+	            const effEnd = currentWeekEnd > lastDate ? lastDate : currentWeekEnd;
+	            const diffInMs = effEnd - effStart;
+	            const deltaDays = diffInMs / (1000 * 60 * 60 * 24);
+	            const daysInWeek = Math.max(Math.min(deltaDays, 7.0), 1.0);
+	            const totalWords = week.totals[sender] || 0;
+	            return (totalWords / daysInWeek).toFixed(2);
+	        }),
+	        borderWidth: 2,
+	        tension: 0.3
+	    }));
+
+	    if (chart) chart.destroy();
+	    chart = new Chart(document.getElementById('msgChart'), {
+	        type: 'line',
+	        data: { labels: sortedWeekKeys, datasets: datasets },
+	        options: { 
+	            responsive: true, 
+	            maintainAspectRatio: false,
+	            plugins: { 
+	                legend: { position: 'bottom' },
+	                tooltip: { intersect: false, mode: 'index' }
+	            },
+	            scales: {
+	                y: { beginAtZero: true, title: { display: true, text: 'Avg Words per Day' } }
+	            }
+	        }
+	    });
+	}
+
 
     document.getElementById('downloadBtn').onclick = () => {
         const link = document.createElement('a');
