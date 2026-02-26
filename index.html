@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BringData Web + Picker</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; background: #f0f2f5; color: #333; }
+        .card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .upload-zone { border: 2px dashed #007bff; padding: 2rem; text-align: center; cursor: pointer; margin-bottom: 1rem; border-radius: 8px; background: #f8fbff; }
+        
+        /* File Picker Styles */
+        #fileList { max-height: 250px; overflow-y: auto; border: 1px solid #ddd; border-radius: 6px; margin: 1rem 0; display: none; }
+        .file-item { padding: 10px 15px; border-bottom: 1px solid #eee; cursor: pointer; transition: background 0.2s; display: flex; justify-content: space-between; }
+        .file-item:hover { background: #e9ecef; }
+        .file-item:last-child { border-bottom: none; }
+        .file-tag { font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; background: #eee; }
+
+        #chartContainer { margin-top: 2rem; height: 400px; }
+        .hidden { display: none !important; }
+        button { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2>BringData: Web Edition</h2>
+    
+    <div class="upload-zone" id="dropZone">
+        <input type="file" id="fileInput" accept=".zip,.json,.txt" hidden>
+        <p><strong>Step 1:</strong> Drag & Drop ZIP or Click to Browse</p>
+    </div>
+
+    <div id="pickerSection" class="hidden">
+        <h3>Select Chat File:</h3>
+        <div id="fileList"></div>
+        <p><small>Picking a file will append its data to the current session.</small></p>
+    </div>
+
+    <div id="status" style="margin: 10px 0; font-weight: bold; color: #007bff;"></div>
+    <button id="resetBtn" class="hidden">Clear All Data</button>
+    
+    <div id="chartContainer">
+        <canvas id="msgChart"></canvas>
+    </div>
+</div>
+
+<script>
+    let activeZip = null;
+    let masterData = []; // Holds all processed messages
+    let chart = null;
+
+    const nameMapper = (name) => name.includes("Matias") ? "Matias" : "Girl";
+
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const fileList = document.getElementById('fileList');
+    const pickerSection = document.getElementById('pickerSection');
+    const status = document.getElementById('status');
+
+    dropZone.onclick = () => fileInput.click();
+    fileInput.onchange = (e) => handleUpload(e.target.files[0]);
+
+    async function handleUpload(file) {
+        if (!file) return;
+
+        if (file.name.endsWith('.zip')) {
+            status.innerText = "Opening ZIP...";
+            activeZip = await JSZip.loadAsync(file);
+            renderFileList(activeZip.files);
+        } else {
+            // Direct file processing (JSON or TXT)
+            const content = await file.text();
+            processData(file.name, content);
+        }
+    }
+
+    function renderFileList(zipFiles) {
+        fileList.innerHTML = '';
+        pickerSection.classList.remove('hidden');
+        fileList.style.display = 'block';
+
+        Object.keys(zipFiles).forEach(path => {
+            if (zipFiles[path].dir) return; // Skip directories
+            
+            const div = document.createElement('div');
+            div.className = 'file-item';
+            const isChat = path.endsWith('.json') || path.endsWith('.txt');
+            
+            div.innerHTML = `
+                <span>${path}</span>
+                <span class="file-tag">${isChat ? 'Chat Data' : 'Asset'}</span>
+            `;
+            
+            div.onclick = async () => {
+                const content = await zipFiles[path].async("string");
+                processData(path, content);
+                status.innerText = `Added: ${path.split('/').pop()}`;
+            };
+            fileList.appendChild(div);
+        });
+    }
+
+    function processData(filename, content) {
+        let newMsgs = [];
+        const lowerName = filename.toLowerCase();
+
+        if (lowerName.endsWith(".json")) {
+            try {
+                const json = JSON.parse(content);
+                const rawMsgs = json.messages || [];
+                rawMsgs.forEach(m => {
+                    const text = m.content || (m.share ? "ATTACHMENT" : "");
+                    newMsgs.push({
+                        date: new Date(m.timestamp_ms),
+                        sender: nameMapper(m.sender_name),
+                        wordCount: text.split(/\s+/).length
+                    });
+                });
+            } catch(e) { alert("Invalid JSON format"); }
+        } 
+        else if (lowerName.endsWith(".txt")) {
+            const regex = /(\d{1,2}\/\d{1,2}\/\d{2}),\s(\d{2}:\d{2})\s-\s(.*?):\s([\s\S]*?)(?=\n\d{1,2}\/\d{1,2}\/\d{2},|$)/g;
+            let match;
+            while ((match = regex.exec(content)) !== null) {
+                const [_, dateStr, timeStr, sender, text] = match;
+                newMsgs.push({
+                    date: new Date(`${dateStr} ${timeStr}`),
+                    sender: nameMapper(sender),
+                    wordCount: text.trim().split(/\s+/).length
+                });
+            }
+        }
+
+        masterData = [...masterData, ...newMsgs];
+        masterData.sort((a, b) => a.date - b.date);
+        updatePlot();
+    }
+
+    function getMonday(d) {
+        const date = new Date(d);
+        const day = date.getDay(), diff = date.getDate() - day + (day == 0 ? -6 : 1);
+        return new Date(date.setDate(diff)).toISOString().split('T')[0];
+    }
+
+    function updatePlot() {
+        const weeks = {};
+        const senders = new Set();
+
+        masterData.forEach(m => {
+            const monday = getMonday(m.date);
+            senders.add(m.sender);
+            if (!weeks[monday]) weeks[monday] = {};
+            weeks[monday][m.sender] = (weeks[monday][m.sender] || 0) + m.wordCount;
+        });
+
+        const sortedWeeks = Object.keys(weeks).sort();
+        const datasets = Array.from(senders).map(sender => {
+            return {
+                label: sender,
+                data: sortedWeeks.map(w => (weeks[w][sender] || 0) / 7), // Avg per day per week
+                borderColor: sender === "Matias" ? '#007bff' : '#ff4757',
+                backgroundColor: sender === "Matias" ? 'rgba(0,123,255,0.1)' : 'rgba(255,71,87,0.1)',
+                tension: 0.3,
+                fill: true
+            };
+        });
+
+        if (chart) chart.destroy();
+        const ctx = document.getElementById('msgChart').getContext('2d');
+        chart = new Chart(ctx, {
+            type: 'line',
+            data: { labels: sortedWeeks, datasets: datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { position: 'bottom' } },
+                scales: { y: { beginAtZero: true, title: { display: true, text: 'Avg Words / Day' } } }
+            }
+        });
+        document.getElementById('resetBtn').classList.remove('hidden');
+    }
+
+    document.getElementById('resetBtn').onclick = () => {
+        masterData = [];
+        if (chart) chart.destroy();
+        status.innerText = "Data cleared.";
+        pickerSection.classList.add('hidden');
+        document.getElementById('resetBtn').classList.add('hidden');
+    };
+</script>
+</body>
+</html>
