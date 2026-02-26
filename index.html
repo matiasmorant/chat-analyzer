@@ -145,6 +145,8 @@
             div.innerText = displayPath;
             div.onclick = async () => {
                 const content = await file.obj.async("string");
+                // Hide the picker section after selection
+                pickerSection.style.display = 'none';
                 processData(file.path, content);
                 status.innerText = `Appended: ${file.path.split('/').pop()}`;
             };
