@@ -1,106 +1,109 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BringData Web + Picker</title>
+    <title>BringData Pico</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; background: #f0f2f5; color: #333; }
-        .card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-        .upload-zone { border: 2px dashed #007bff; padding: 2rem; text-align: center; cursor: pointer; margin-bottom: 1rem; border-radius: 8px; background: #f8fbff; }
-        
-        /* File Picker Styles */
-        #fileList { max-height: 250px; overflow-y: auto; border: 1px solid #ddd; border-radius: 6px; margin: 1rem 0; display: none; }
-        .file-item { padding: 10px 15px; border-bottom: 1px solid #eee; cursor: pointer; transition: background 0.2s; display: flex; justify-content: space-between; }
-        .file-item:hover { background: #e9ecef; }
-        .file-item:last-child { border-bottom: none; }
-        .file-tag { font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; background: #eee; }
-
-        #chartContainer { margin-top: 2rem; height: 400px; }
-        .hidden { display: none !important; }
-        button { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; }
+        :root { --chart-height: 400px; }
+        .file-scroll { max-height: 250px; overflow-y: auto; margin-bottom: var(--pico-spacing); }
+        .file-item { cursor: pointer; padding: 0.5rem; border-bottom: 1px solid var(--pico-muted-border-color); font-family: monospace; font-size: 0.85rem; }
+        .file-item:hover { background: var(--pico-secondary-hover-background); }
+        #msgChart { height: var(--chart-height) !important; }
     </style>
 </head>
 <body>
 
-<div class="card">
-    <h2>BringData: Web Edition</h2>
-    
-    <div class="upload-zone" id="dropZone">
-        <input type="file" id="fileInput" accept=".zip,.json,.txt" hidden>
-        <p><strong>Step 1:</strong> Drag & Drop ZIP or Click to Browse</p>
-    </div>
+<main class="container">
+    <hgroup>
+        <h1>BringData</h1>
+        <p>Chat statistics visualizer (WhatsApp & Instagram)</p>
+    </hgroup>
 
-    <div id="pickerSection" class="hidden">
-        <h3>Select Chat File:</h3>
-        <div id="fileList"></div>
-        <p><small>Picking a file will append its data to the current session.</small></p>
-    </div>
+    <article id="upload-area">
+        <label for="fileInput">
+            <strong>Step 1: Upload ZIP or Chat File</strong>
+            <input type="file" id="fileInput" accept=".zip,.json,.txt">
+        </label>
+        <small id="status">Waiting for data...</small>
+    </article>
 
-    <div id="status" style="margin: 10px 0; font-weight: bold; color: #007bff;"></div>
-    <button id="resetBtn" class="hidden">Clear All Data</button>
-    
-    <div id="chartContainer">
+    <article id="pickerSection" class="hidden" style="display:none">
+        <header>Select a file to process</header>
+        <input type="search" id="searchInput" placeholder="Filter files...">
+        <div class="file-scroll" id="fileList"></div>
+        <footer>
+            <small>Click a file to append its data to the plot.</small>
+        </footer>
+    </article>
+
+    <article id="chartArea" style="display:none">
         <canvas id="msgChart"></canvas>
-    </div>
-</div>
+        <footer class="grid">
+            <button class="secondary" id="downloadBtn">Download Plot (PNG)</button>
+            <button class="outline contrast" id="resetBtn">Clear All</button>
+        </footer>
+    </article>
+</main>
 
 <script>
-    let activeZip = null;
-    let masterData = []; // Holds all processed messages
+    let activeZipFiles = [];
+    let masterData = [];
     let chart = null;
 
+    // Logic from statsAvg2.py
     const nameMapper = (name) => name.includes("Matias") ? "Matias" : "Girl";
 
-    const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
     const fileList = document.getElementById('fileList');
-    const pickerSection = document.getElementById('pickerSection');
+    const searchInput = document.getElementById('searchInput');
     const status = document.getElementById('status');
+    const pickerSection = document.getElementById('pickerSection');
+    const chartArea = document.getElementById('chartArea');
 
-    dropZone.onclick = () => fileInput.click();
     fileInput.onchange = (e) => handleUpload(e.target.files[0]);
+    searchInput.oninput = (e) => filterFiles(e.target.value);
 
     async function handleUpload(file) {
         if (!file) return;
-
         if (file.name.endsWith('.zip')) {
-            status.innerText = "Opening ZIP...";
-            activeZip = await JSZip.loadAsync(file);
-            renderFileList(activeZip.files);
+            status.innerText = "Reading ZIP archive...";
+            const zip = await JSZip.loadAsync(file);
+            activeZipFiles = Object.keys(zip.files).filter(path => {
+                const low = path.toLowerCase();
+                return !zip.files[path].dir && (low.endsWith('.json') || low.endsWith('.txt'));
+            }).map(path => ({ path, obj: zip.files[path] }));
+            
+            renderList(activeZipFiles);
+            pickerSection.style.display = 'block';
+            status.innerText = "ZIP loaded. Use the search bar to find chat logs.";
         } else {
-            // Direct file processing (JSON or TXT)
             const content = await file.text();
             processData(file.name, content);
         }
     }
 
-    function renderFileList(zipFiles) {
+    function renderList(files) {
         fileList.innerHTML = '';
-        pickerSection.classList.remove('hidden');
-        fileList.style.display = 'block';
-
-        Object.keys(zipFiles).forEach(path => {
-            if (zipFiles[path].dir) return; // Skip directories
-            
+        files.forEach(file => {
             const div = document.createElement('div');
             div.className = 'file-item';
-            const isChat = path.endsWith('.json') || path.endsWith('.txt');
-            
-            div.innerHTML = `
-                <span>${path}</span>
-                <span class="file-tag">${isChat ? 'Chat Data' : 'Asset'}</span>
-            `;
-            
+            div.innerText = file.path;
             div.onclick = async () => {
-                const content = await zipFiles[path].async("string");
-                processData(path, content);
-                status.innerText = `Added: ${path.split('/').pop()}`;
+                const content = await file.obj.async("string");
+                processData(file.path, content);
+                status.innerText = `Added data from: ${file.path.split('/').pop()}`;
             };
             fileList.appendChild(div);
         });
+    }
+
+    function filterFiles(term) {
+        const filtered = activeZipFiles.filter(f => f.path.toLowerCase().includes(term.toLowerCase()));
+        renderList(filtered);
     }
 
     function processData(filename, content) {
@@ -110,86 +113,70 @@
         if (lowerName.endsWith(".json")) {
             try {
                 const json = JSON.parse(content);
-                const rawMsgs = json.messages || [];
-                rawMsgs.forEach(m => {
+                (json.messages || []).forEach(m => {
                     const text = m.content || (m.share ? "ATTACHMENT" : "");
                     newMsgs.push({
                         date: new Date(m.timestamp_ms),
                         sender: nameMapper(m.sender_name),
-                        wordCount: text.split(/\s+/).length
+                        wordCount: String(text).split(/\s+/).length
                     });
                 });
-            } catch(e) { alert("Invalid JSON format"); }
-        } 
-        else if (lowerName.endsWith(".txt")) {
+            } catch(e) { console.error("JSON Error", e); }
+        } else if (lowerName.endsWith(".txt")) {
+            // WhatsApp Regex from statsAvg2.py
             const regex = /(\d{1,2}\/\d{1,2}\/\d{2}),\s(\d{2}:\d{2})\s-\s(.*?):\s([\s\S]*?)(?=\n\d{1,2}\/\d{1,2}\/\d{2},|$)/g;
             let match;
             while ((match = regex.exec(content)) !== null) {
-                const [_, dateStr, timeStr, sender, text] = match;
                 newMsgs.push({
-                    date: new Date(`${dateStr} ${timeStr}`),
-                    sender: nameMapper(sender),
-                    wordCount: text.trim().split(/\s+/).length
+                    date: new Date(`${match[1]} ${match[2]}`),
+                    sender: nameMapper(match[3]),
+                    wordCount: match[4].trim().split(/\s+/).length
                 });
             }
         }
 
-        masterData = [...masterData, ...newMsgs];
-        masterData.sort((a, b) => a.date - b.date);
+        masterData = [...masterData, ...newMsgs].sort((a, b) => a.date - b.date);
+        chartArea.style.display = 'block';
         updatePlot();
-    }
-
-    function getMonday(d) {
-        const date = new Date(d);
-        const day = date.getDay(), diff = date.getDate() - day + (day == 0 ? -6 : 1);
-        return new Date(date.setDate(diff)).toISOString().split('T')[0];
     }
 
     function updatePlot() {
         const weeks = {};
         const senders = new Set();
-
         masterData.forEach(m => {
-            const monday = getMonday(m.date);
+            const d = new Date(m.date);
+            const day = d.getDay(), diff = d.getDate() - day + (day == 0 ? -6 : 1);
+            const monday = new Date(d.setDate(diff)).toISOString().split('T')[0];
+            
             senders.add(m.sender);
             if (!weeks[monday]) weeks[monday] = {};
             weeks[monday][m.sender] = (weeks[monday][m.sender] || 0) + m.wordCount;
         });
 
         const sortedWeeks = Object.keys(weeks).sort();
-        const datasets = Array.from(senders).map(sender => {
-            return {
-                label: sender,
-                data: sortedWeeks.map(w => (weeks[w][sender] || 0) / 7), // Avg per day per week
-                borderColor: sender === "Matias" ? '#007bff' : '#ff4757',
-                backgroundColor: sender === "Matias" ? 'rgba(0,123,255,0.1)' : 'rgba(255,71,87,0.1)',
-                tension: 0.3,
-                fill: true
-            };
-        });
+        const datasets = Array.from(senders).map(sender => ({
+            label: sender,
+            data: sortedWeeks.map(w => (weeks[w][sender] || 0) / 7),
+            borderWidth: 2,
+            tension: 0.2
+        }));
 
         if (chart) chart.destroy();
-        const ctx = document.getElementById('msgChart').getContext('2d');
-        chart = new Chart(ctx, {
+        chart = new Chart(document.getElementById('msgChart'), {
             type: 'line',
             data: { labels: sortedWeeks, datasets: datasets },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: { legend: { position: 'bottom' } },
-                scales: { y: { beginAtZero: true, title: { display: true, text: 'Avg Words / Day' } } }
-            }
+            options: { responsive: true, maintainAspectRatio: false }
         });
-        document.getElementById('resetBtn').classList.remove('hidden');
     }
 
-    document.getElementById('resetBtn').onclick = () => {
-        masterData = [];
-        if (chart) chart.destroy();
-        status.innerText = "Data cleared.";
-        pickerSection.classList.add('hidden');
-        document.getElementById('resetBtn').classList.add('hidden');
+    document.getElementById('downloadBtn').onclick = () => {
+        const link = document.createElement('a');
+        link.download = 'word_count_plot.png';
+        link.href = document.getElementById('msgChart').toDataURL('image/png');
+        link.click();
     };
+
+    document.getElementById('resetBtn').onclick = () => location.reload();
 </script>
 </body>
 </html>
