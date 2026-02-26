@@ -3,16 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BringData Pico</title>
+    <title>BringData Pico + date-fns</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@3.6.0/cdn.min.js"></script>
     <style>
-        :root { --chart-height: 400px; }
-        .file-scroll { max-height: 250px; overflow-y: auto; margin-bottom: var(--pico-spacing); }
-        .file-item { cursor: pointer; padding: 0.5rem; border-bottom: 1px solid var(--pico-muted-border-color); font-family: monospace; font-size: 0.85rem; }
+        :root { --chart-height: 450px; }
+        .file-scroll { max-height: 250px; overflow-y: auto; margin-bottom: var(--pico-spacing); border: 1px solid var(--pico-muted-border-color); border-radius: 4px; }
+        .file-item { cursor: pointer; padding: 0.5rem; border-bottom: 1px solid var(--pico-muted-border-color); font-family: monospace; font-size: 0.85rem; transition: background 0.2s; }
         .file-item:hover { background: var(--pico-secondary-hover-background); }
-        #msgChart { height: var(--chart-height) !important; }
+        .file-item:last-child { border-bottom: none; }
+        #msgChart { height: var(--chart-height) !important; width: 100% !important; }
     </style>
 </head>
 <body>
@@ -20,31 +22,28 @@
 <main class="container">
     <hgroup>
         <h1>BringData</h1>
-        <p>Chat statistics visualizer (WhatsApp & Instagram)</p>
+        <p>Interactive Chat Analytics</p>
     </hgroup>
 
     <article id="upload-area">
         <label for="fileInput">
-            <strong>Step 1: Upload ZIP or Chat File</strong>
+            <strong>Step 1: Upload ZIP, JSON, or TXT</strong>
             <input type="file" id="fileInput" accept=".zip,.json,.txt">
         </label>
-        <small id="status">Waiting for data...</small>
+        <small id="status">Ready to process exports.</small>
     </article>
 
-    <article id="pickerSection" class="hidden" style="display:none">
-        <header>Select a file to process</header>
-        <input type="search" id="searchInput" placeholder="Filter files...">
+    <article id="pickerSection" style="display:none">
+        <header><strong>Step 2: File Picker (fzf-style)</strong></header>
+        <input type="search" id="searchInput" placeholder="Search by name or extension...">
         <div class="file-scroll" id="fileList"></div>
-        <footer>
-            <small>Click a file to append its data to the plot.</small>
-        </footer>
     </article>
 
     <article id="chartArea" style="display:none">
         <canvas id="msgChart"></canvas>
         <footer class="grid">
-            <button class="secondary" id="downloadBtn">Download Plot (PNG)</button>
-            <button class="outline contrast" id="resetBtn">Clear All</button>
+            <button class="secondary" id="downloadBtn">Download Plot</button>
+            <button class="outline contrast" id="resetBtn">Reset Session</button>
         </footer>
     </article>
 </main>
@@ -54,7 +53,6 @@
     let masterData = [];
     let chart = null;
 
-    // Logic from statsAvg2.py
     const nameMapper = (name) => name.includes("Matias") ? "Matias" : "Girl";
 
     const fileInput = document.getElementById('fileInput');
@@ -70,7 +68,7 @@
     async function handleUpload(file) {
         if (!file) return;
         if (file.name.endsWith('.zip')) {
-            status.innerText = "Reading ZIP archive...";
+            status.innerText = "Indexing ZIP...";
             const zip = await JSZip.loadAsync(file);
             activeZipFiles = Object.keys(zip.files).filter(path => {
                 const low = path.toLowerCase();
@@ -79,7 +77,7 @@
             
             renderList(activeZipFiles);
             pickerSection.style.display = 'block';
-            status.innerText = "ZIP loaded. Use the search bar to find chat logs.";
+            status.innerText = "Filter files using the search box.";
         } else {
             const content = await file.text();
             processData(file.name, content);
@@ -95,7 +93,7 @@
             div.onclick = async () => {
                 const content = await file.obj.async("string");
                 processData(file.path, content);
-                status.innerText = `Added data from: ${file.path.split('/').pop()}`;
+                status.innerText = `Appended: ${file.path.split('/').pop()}`;
             };
             fileList.appendChild(div);
         });
@@ -123,12 +121,13 @@
                 });
             } catch(e) { console.error("JSON Error", e); }
         } else if (lowerName.endsWith(".txt")) {
-            // WhatsApp Regex from statsAvg2.py
             const regex = /(\d{1,2}\/\d{1,2}\/\d{2}),\s(\d{2}:\d{2})\s-\s(.*?):\s([\s\S]*?)(?=\n\d{1,2}\/\d{1,2}\/\d{2},|$)/g;
             let match;
             while ((match = regex.exec(content)) !== null) {
+                // date-fns parsing is safer than native Date for MM/DD/YY
+                const dt = dateFns.parse(`${match[1]} ${match[2]}`, 'M/d/yy HH:mm', new Date());
                 newMsgs.push({
-                    date: new Date(`${match[1]} ${match[2]}`),
+                    date: dt,
                     sender: nameMapper(match[3]),
                     wordCount: match[4].trim().split(/\s+/).length
                 });
@@ -143,10 +142,10 @@
     function updatePlot() {
         const weeks = {};
         const senders = new Set();
+        
         masterData.forEach(m => {
-            const d = new Date(m.date);
-            const day = d.getDay(), diff = d.getDate() - day + (day == 0 ? -6 : 1);
-            const monday = new Date(d.setDate(diff)).toISOString().split('T')[0];
+            // Group by Monday using date-fns
+            const monday = dateFns.format(dateFns.startOfWeek(m.date, { weekStartsOn: 1 }), 'yyyy-MM-dd');
             
             senders.add(m.sender);
             if (!weeks[monday]) weeks[monday] = {};
@@ -158,20 +157,24 @@
             label: sender,
             data: sortedWeeks.map(w => (weeks[w][sender] || 0) / 7),
             borderWidth: 2,
-            tension: 0.2
+            tension: 0.3
         }));
 
         if (chart) chart.destroy();
         chart = new Chart(document.getElementById('msgChart'), {
             type: 'line',
             data: { labels: sortedWeeks, datasets: datasets },
-            options: { responsive: true, maintainAspectRatio: false }
+            options: { 
+                responsive: true, 
+                maintainAspectRatio: false,
+                plugins: { legend: { position: 'bottom' } }
+            }
         });
     }
 
     document.getElementById('downloadBtn').onclick = () => {
         const link = document.createElement('a');
-        link.download = 'word_count_plot.png';
+        link.download = 'chat_stats.png';
         link.href = document.getElementById('msgChart').toDataURL('image/png');
         link.click();
     };
