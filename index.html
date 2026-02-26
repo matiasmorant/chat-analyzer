@@ -139,63 +139,129 @@
         updatePlot();
     }
 
-	function updatePlot() {
-	    if (masterData.length === 0) return;
+function updatePlot() {
+    if (masterData.length === 0) return;
 
-	    const weeks = {};
-	    const senders = new Set();
-	    
-	    // 1. Find the absolute bounds of the data (similar to first_date/last_date in Python)
-	    const firstDate = masterData[0].date;
-	    const lastDate = masterData[masterData.length - 1].date;
+    const weeks = {};
+    const senders = new Set();
+    
+    // 1. Original Data Bounds for compensation logic
+    const firstDate = masterData[0].date;
+    const lastDate = masterData[masterData.length - 1].date;
 
-	    masterData.forEach(m => {
-	        const mondayDate = dateFns.startOfWeek(m.date, { weekStartsOn: 1 });
-	        const mondayStr = dateFns.format(mondayDate, 'yyyy-MM-dd');
-	        
-	        senders.add(m.sender);
-	        if (!weeks[mondayStr]) weeks[mondayStr] = { totals: {}, monday: mondayDate };
-	        
-	        weeks[mondayStr].totals[m.sender] = (weeks[mondayStr].totals[m.sender] || 0) + m.wordCount;
-	    });
+    // 2. Padding logic for the X-axis
+    const paddedFirstDate = dateFns.subWeeks(dateFns.startOfDay(firstDate), 1);
+    const totalDays = dateFns.differenceInDays(lastDate, paddedFirstDate);
 
-	    const sortedWeekKeys = Object.keys(weeks).sort();
-	    
-	    const datasets = Array.from(senders).map(sender => ({
-	        label: sender,
-	        data: sortedWeekKeys.map(wKey => {
-	            const week = weeks[wKey];
-	            const currentWeekStart = week.monday;
-	            const currentWeekEnd = dateFns.addDays(currentWeekStart, 7);
-	            const effStart = currentWeekStart < firstDate ? firstDate : currentWeekStart;
-	            const effEnd = currentWeekEnd > lastDate ? lastDate : currentWeekEnd;
-	            const diffInMs = effEnd - effStart;
-	            const deltaDays = diffInMs / (1000 * 60 * 60 * 24);
-	            const daysInWeek = Math.max(Math.min(deltaDays, 7.0), 1.0);
-	            const totalWords = week.totals[sender] || 0;
-	            return (totalWords / daysInWeek).toFixed(2);
-	        }),
-	        borderWidth: 2,
-	        tension: 0.3
-	    }));
+    masterData.forEach(m => {
+        const mondayDate = dateFns.startOfWeek(m.date, { weekStartsOn: 1 });
+        const mondayStr = dateFns.format(mondayDate, 'yyyy-MM-dd');
+        
+        senders.add(m.sender);
+        if (!weeks[mondayStr]) weeks[mondayStr] = { totals: {}, monday: mondayDate };
+        weeks[mondayStr].totals[m.sender] = (weeks[mondayStr].totals[m.sender] || 0) + m.wordCount;
+    });
 
-	    if (chart) chart.destroy();
-	    chart = new Chart(document.getElementById('msgChart'), {
-	        type: 'line',
-	        data: { labels: sortedWeekKeys, datasets: datasets },
-	        options: { 
-	            responsive: true, 
-	            maintainAspectRatio: false,
-	            plugins: { 
-	                legend: { position: 'bottom' },
-	                tooltip: { intersect: false, mode: 'index' }
-	            },
-	            scales: {
-	                y: { beginAtZero: true, title: { display: true, text: 'Avg Words per Day' } }
-	            }
-	        }
-	    });
-	}
+    const sortedWeekKeys = Object.keys(weeks).sort();
+    
+    const datasets = Array.from(senders).map(sender => ({
+        label: sender,
+        data: sortedWeekKeys.map(wKey => {
+            const week = weeks[wKey];
+            const currentWeekStart = week.monday;
+            const currentWeekEnd = dateFns.addDays(currentWeekStart, 7);
+
+            // 3. Original Logic: Compensate for incomplete weeks
+            const effStart = currentWeekStart < firstDate ? firstDate : currentWeekStart;
+            const effEnd = currentWeekEnd > lastDate ? lastDate : currentWeekEnd;
+            const diffInMs = effEnd - effStart;
+            const deltaDays = diffInMs / (1000 * 60 * 60 * 24);
+            const daysInWeek = Math.max(Math.min(deltaDays, 7.0), 1.0); // Use original 1.0 floor
+
+            const totalWords = week.totals[sender] || 0;
+            return {
+                x: dateFns.differenceInDays(currentWeekStart, paddedFirstDate),
+                y: (totalWords / daysInWeek).toFixed(2)
+            };
+        }),
+        borderWidth: 2,
+        tension: 0.3
+    }));
+
+    // 4. Month boundaries for centered labels and stripes
+    const monthBoundaries = [];
+    let curr = dateFns.startOfMonth(paddedFirstDate);
+    while (curr <= lastDate) {
+        const startOffset = dateFns.differenceInDays(curr, paddedFirstDate);
+        const nextMonth = dateFns.addMonths(curr, 1);
+        const endOffset = dateFns.differenceInDays(nextMonth, paddedFirstDate);
+        
+        monthBoundaries.push({
+            label: dateFns.format(curr, 'yyyy-M'),
+            start: startOffset,
+            end: endOffset,
+            mid: startOffset + (endOffset - startOffset) / 2
+        });
+        curr = nextMonth;
+    }
+
+    const monthStripes = {
+        id: 'monthStripes',
+        beforeDraw: (chart) => {
+            const { ctx, chartArea, scales: { x } } = chart;
+            ctx.save();
+            monthBoundaries.forEach((m, i) => {
+                if (i % 2 === 0) {
+                    const left = Math.max(chartArea.left, x.getPixelForValue(m.start));
+                    const right = Math.min(chartArea.right, x.getPixelForValue(m.end));
+                    if (left < chartArea.right && right > chartArea.left) {
+                        ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+                        ctx.fillRect(left, chartArea.top, right - left, chartArea.bottom - chartArea.top);
+                    }
+                }
+            });
+            ctx.restore();
+        }
+    };
+
+    if (chart) chart.destroy();
+    chart = new Chart(document.getElementById('msgChart'), {
+        type: 'line',
+        plugins: [monthStripes],
+        data: { datasets: datasets },
+        options: {
+            responsive: true, 
+            maintainAspectRatio: false,
+            scales: {
+                x: {
+                    type: 'linear',
+                    min: 0,
+                    max: totalDays,
+                    grid: { display: false },
+                    ticks: {
+                        autoSkip: false,
+                        callback: function(value) {
+                            const match = monthBoundaries.find(m => Math.round(m.mid) === value);
+                            return match ? match.label : null;
+                        },
+                        stepSize: 1 
+                    }
+                },
+                y: { beginAtZero: true, title: { display: true, text: 'Avg Words per Day' } }
+            },
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        title: (items) => {
+                            const d = dateFns.addDays(paddedFirstDate, items[0].parsed.x);
+                            return dateFns.format(d, 'MMM do, yyyy');
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
 
 
     document.getElementById('downloadBtn').onclick = () => {
