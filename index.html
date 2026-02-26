@@ -15,6 +15,8 @@
         .file-item:hover { background: var(--pico-secondary-hover-background); }
         .file-item:last-child { border-bottom: none; }
         #msgChart { height: var(--chart-height) !important; width: 100% !important; }
+        .controls-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+        .controls-row label { margin-bottom: 0; cursor: pointer; }
     </style>
 </head>
 <body>
@@ -40,6 +42,12 @@
     </article>
 
     <article id="chartArea" style="display:none">
+        <div class="controls-row">
+            <label>
+                <input type="checkbox" id="logScaleCheck" role="switch">
+                Logarithmic Scale (Y)
+            </label>
+        </div>
         <canvas id="msgChart"></canvas>
         <footer class="grid">
             <button class="secondary" id="downloadBtn">Download Plot</button>
@@ -61,9 +69,11 @@
     const status = document.getElementById('status');
     const pickerSection = document.getElementById('pickerSection');
     const chartArea = document.getElementById('chartArea');
+    const logScaleCheck = document.getElementById('logScaleCheck');
 
     fileInput.onchange = (e) => handleUpload(e.target.files[0]);
     searchInput.oninput = (e) => filterFiles(e.target.value);
+    logScaleCheck.onchange = () => updatePlot();
 
     async function handleUpload(file) {
         if (!file) return;
@@ -124,7 +134,6 @@
             const regex = /(\d{1,2}\/\d{1,2}\/\d{2}),\s(\d{2}:\d{2})\s-\s(.*?):\s([\s\S]*?)(?=\n\d{1,2}\/\d{1,2}\/\d{2},|$)/g;
             let match;
             while ((match = regex.exec(content)) !== null) {
-                // date-fns parsing is safer than native Date for MM/DD/YY
                 const dt = dateFns.parse(`${match[1]} ${match[2]}`, 'M/d/yy HH:mm', new Date());
                 newMsgs.push({
                     date: dt,
@@ -142,14 +151,13 @@
 function updatePlot() {
     if (masterData.length === 0) return;
 
+    const isLog = logScaleCheck.checked;
     const weeks = {};
     const senders = new Set();
     
-    // 1. Original Data Bounds for compensation logic
     const firstDate = masterData[0].date;
     const lastDate = masterData[masterData.length - 1].date;
 
-    // 2. Padding logic for the X-axis
     const paddedFirstDate = dateFns.subWeeks(dateFns.startOfDay(firstDate), 1);
     const totalDays = dateFns.differenceInDays(lastDate, paddedFirstDate);
 
@@ -171,24 +179,24 @@ function updatePlot() {
             const currentWeekStart = week.monday;
             const currentWeekEnd = dateFns.addDays(currentWeekStart, 7);
 
-            // 3. Original Logic: Compensate for incomplete weeks
             const effStart = currentWeekStart < firstDate ? firstDate : currentWeekStart;
             const effEnd = currentWeekEnd > lastDate ? lastDate : currentWeekEnd;
             const diffInMs = effEnd - effStart;
             const deltaDays = diffInMs / (1000 * 60 * 60 * 24);
-            const daysInWeek = Math.max(Math.min(deltaDays, 7.0), 1.0); // Use original 1.0 floor
+            const daysInWeek = Math.max(Math.min(deltaDays, 7.0), 1.0);
 
             const totalWords = week.totals[sender] || 0;
+            const avg = totalWords / daysInWeek;
+            
             return {
                 x: dateFns.differenceInDays(currentWeekStart, paddedFirstDate),
-                y: (totalWords / daysInWeek).toFixed(2)
+                y: isLog && avg < 1 ? 1 : avg // Log scale requires values > 0
             };
         }),
         borderWidth: 2,
         tension: 0.3
     }));
 
-    // 4. Month boundaries for centered labels and stripes
     const monthBoundaries = [];
     let curr = dateFns.startOfMonth(paddedFirstDate);
     while (curr <= lastDate) {
@@ -247,7 +255,19 @@ function updatePlot() {
                         stepSize: 1 
                     }
                 },
-                y: { beginAtZero: true, title: { display: true, text: 'Avg Words per Day' } }
+                y: { 
+                    type: isLog ? 'logarithmic' : 'linear',
+                    beginAtZero: !isLog,
+                    ticks: {
+                        mirror: true, // Labels inside the chart
+                        z: 10,        // Labels on top
+                        padding: -5,
+                        callback: function(value) {
+                            return Number(value).toLocaleString();
+                        }
+                    },
+                    title: { display: true, text: 'Avg Words per Day' } 
+                }
             },
             plugins: {
                 tooltip: {
@@ -262,7 +282,6 @@ function updatePlot() {
         }
     });
 }
-
 
     document.getElementById('downloadBtn').onclick = () => {
         const link = document.createElement('a');
