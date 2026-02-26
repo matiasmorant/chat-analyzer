@@ -21,12 +21,13 @@ while true; do
     ' _ {}
 
     # 4. Select item to keep
-    PRESERVE_PATH=$(fd . "$TEMP_DIR" | fzf --prompt="Select item to keep: ")
+    cd "$TEMP_DIR"
+    PRESERVE_PATH=$(fd . | fzf --prompt="Select item to keep: ")
 
     if [ -n "$PRESERVE_PATH" ]; then
         FINAL_NAME=$(basename "$PRESERVE_PATH")
-        mv "$PRESERVE_PATH" "./$FINAL_NAME"
-        
+        mv "$PRESERVE_PATH" "../$FINAL_NAME"
+        cd ..
         rm -rf "$TEMP_DIR" "$LOCAL_ZIP"
 
         # 5. Process
@@ -40,6 +41,7 @@ while true; do
         rm -rf "$FINAL_NAME"
         echo "Processed: $FINAL_NAME"
     else
+        cd ..
         rm -rf "$TEMP_DIR" "$LOCAL_ZIP"
     fi
 
@@ -50,3 +52,8 @@ while true; do
         break
     }
 done
+
+IMG=$(fd -e png)
+mv "$IMG"  ~/storage/downloads/
+# termux-open ~/storage/downloads/"$(basename "$IMG")"
+
