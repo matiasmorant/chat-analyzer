@@ -112,12 +112,37 @@
         }
     }
 
+    function getLongestCommonPrefix(paths) {
+        if (!paths.length) return "";
+        let sorted = paths.concat().sort();
+        let a1 = sorted[0], a2 = sorted[sorted.length - 1], L = a1.length, i = 0;
+        while (i < L && a1.charAt(i) === a2.charAt(i)) i++;
+        return a1.substring(0, i);
+    }
+
     function renderList(files) {
         fileList.innerHTML = '';
+        
+        const paths = files.map(f => f.path);
+        let commonPrefix = getLongestCommonPrefix(paths);
+        
+        // Ensure we only strip at directory boundaries
+        const lastSlash = commonPrefix.lastIndexOf('/');
+        if (lastSlash !== -1) {
+            commonPrefix = commonPrefix.substring(0, lastSlash + 1);
+        } else {
+            commonPrefix = "";
+        }
+
         files.forEach(file => {
             const div = document.createElement('div');
             div.className = 'file-item';
-            div.innerText = file.path;
+            
+            const displayPath = file.path.startsWith(commonPrefix) 
+                ? file.path.replace(commonPrefix, '') 
+                : file.path;
+
+            div.innerText = displayPath;
             div.onclick = async () => {
                 const content = await file.obj.async("string");
                 processData(file.path, content);
